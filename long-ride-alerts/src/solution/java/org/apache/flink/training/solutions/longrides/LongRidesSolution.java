@@ -67,6 +67,7 @@ public class LongRidesSolution extends ExerciseBase {
 
 		@Override
 		public void open(Configuration config) {
+			// 和key绑定
 			ValueStateDescriptor<TaxiRide> stateDescriptor =
 					new ValueStateDescriptor<>("ride event", TaxiRide.class);
 			rideState = getRuntimeContext().getState(stateDescriptor);
@@ -74,6 +75,7 @@ public class LongRidesSolution extends ExerciseBase {
 
 		@Override
 		public void processElement(TaxiRide ride, Context context, Collector<TaxiRide> out) throws Exception {
+			// context和key绑定
 			TaxiRide previousRideEvent = rideState.value();
 
 			if (previousRideEvent == null) {

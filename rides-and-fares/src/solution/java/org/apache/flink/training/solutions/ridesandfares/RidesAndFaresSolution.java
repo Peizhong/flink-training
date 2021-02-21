@@ -18,20 +18,35 @@
 
 package org.apache.flink.training.solutions.ridesandfares;
 
+import org.apache.flink.api.common.eventtime.WatermarkGenerator;
+import org.apache.flink.api.common.eventtime.WatermarkGeneratorSupplier;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.functions.FilterFunction;
+import org.apache.flink.api.common.functions.FlatMapFunction;
+import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.CheckpointConfig;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.AssignerWithPeriodicWatermarks;
+import org.apache.flink.streaming.api.functions.ProcessFunction;
+import org.apache.flink.streaming.api.functions.co.CoFlatMapFunction;
 import org.apache.flink.streaming.api.functions.co.RichCoFlatMapFunction;
+import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor;
+import org.apache.flink.streaming.api.watermark.Watermark;
+import org.apache.flink.streaming.runtime.operators.util.AssignerWithPeriodicWatermarksAdapter;
 import org.apache.flink.training.exercises.common.datatypes.TaxiFare;
 import org.apache.flink.training.exercises.common.datatypes.TaxiRide;
 import org.apache.flink.training.exercises.common.sources.TaxiFareGenerator;
 import org.apache.flink.training.exercises.common.sources.TaxiRideGenerator;
 import org.apache.flink.training.exercises.common.utils.ExerciseBase;
 import org.apache.flink.util.Collector;
+
+import javax.annotation.Nullable;
 
 /**
  * Java reference implementation for the "Stateful Enrichment" exercise of the Flink training in the docs.
@@ -74,17 +89,30 @@ public class RidesAndFaresSolution extends ExerciseBase {
 
 		// Set a UID on the stateful flatmap operator so we can read its state using the State Processor API.
 		DataStream<Tuple2<TaxiRide, TaxiFare>> enrichedRides = rides
-				.connect(fares)
+				.connect(fares) // connect的2个流有相同的key
 				.flatMap(new EnrichmentFunction())
 				.uid("enrichment");
 
-		printOrTest(enrichedRides);
+		DataStream<Tuple2<Long,Float>> result = enrichedRides.process(new ProcessFunction<Tuple2<TaxiRide, TaxiFare>, Tuple2<Long, Float>>() {
+			@Override
+			public void processElement(Tuple2<TaxiRide, TaxiFare> value, Context ctx, Collector<Tuple2<Long, Float>> out) throws Exception {
+				out.collect(Tuple2.of(value.f0.rideId,value.f1.totalFare));
+			}
+
+			@Override
+			public void onTimer(long timestamp, OnTimerContext ctx, Collector<Tuple2<Long, Float>> out) throws Exception {
+				// ctx.timerService().currentProcessingTime()
+			}
+		});
+
+
+		printOrTest(result);
 
 		env.execute("Join Rides with Fares (java RichCoFlatMap)");
 	}
 
 	public static class EnrichmentFunction extends RichCoFlatMapFunction<TaxiRide, TaxiFare, Tuple2<TaxiRide, TaxiFare>> {
-		// keyed, managed state
+		// keyed, managed state，每个key对应的状态
 		private ValueState<TaxiRide> rideState;
 		private ValueState<TaxiFare> fareState;
 
@@ -97,8 +125,8 @@ public class RidesAndFaresSolution extends ExerciseBase {
 		@Override
 		public void flatMap1(TaxiRide ride, Collector<Tuple2<TaxiRide, TaxiFare>> out) throws Exception {
 			TaxiFare fare = fareState.value();
-			if (fare != null) {
-				fareState.clear();
+			if (fare != null) { // fare已经到达
+				fareState.clear(); // ?用完了怎么回收
 				out.collect(Tuple2.of(ride, fare));
 			} else {
 				rideState.update(ride);
